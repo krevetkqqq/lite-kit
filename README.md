@@ -252,7 +252,11 @@ opkg() { PATH="$OPT/bin:$OPT/sbin:$PATH" env -u LD_LIBRARY_PATH -u LD_PRELOAD "$
 Флаг-файлы (создать пустой файл, потом перезапуск):
 
 - `SYNC_LOCAL=1` (env) — отдавать локальный шаблон sync вместо Яндекса;
-- `run/no_downgrade` — запретить авто-раздачу прошивки из `firmware/`.
+- `run/no_downgrade` — запретить авто-раздачу прошивки из `firmware/`;
+- `run/unbound_privacy` (или `UNBOUND_PRIVACY=1`) — отдавать в sync `unbound` без DNS Яндекса
+  (`forwarders: []`, остаётся DNS из DHCP) и с `refuse` для `clck.yandex.net` и
+  `clck.yasmina.yango.com`. Колонка перестаёт разрешать `quasar.*` через `77.88.8.x` мимо
+  стенда, телеметрия clck не уходит. Блок держится, пока колонка синхронизируется со стендом.
 
 ---
 
