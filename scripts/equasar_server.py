@@ -31,7 +31,10 @@ UPSTREAM_HOST = "quasar.yandex.net"
 
 def real_ip(host=UPSTREAM_HOST):
     """Настоящий IP: DoH -> системный DNS -> известный адрес (свой IP не отдаём)."""
+    # LOCAL_IP может быть дополнительным адресом интерфейса: gethostbyname_ex его не видит
     mine = set(local_ips()) if "local_ips" in globals() else set()
+    if "LOCAL_IP" in globals():
+        mine.add(LOCAL_IP)
     try:
         u = "https://dns.google/resolve?name=%s&type=A" % host
         d = json.loads(urllib.request.urlopen(u, timeout=5).read())
@@ -249,6 +252,8 @@ def _downgrade_payload(fw=None):
 
 # --- опциональные настройки через окружение (все необязательные) ---
 LOCAL_IP = os.environ.get("LOCAL_IP") or _local_ip()
+# адрес, на котором слушают DNS/HTTP/HTTPS; 0.0.0.0 — все интерфейсы
+BIND_IP = os.environ.get("BIND_IP") or "0.0.0.0"
 COLUMN_IPS = {ip.strip() for ip in os.environ.get("COLUMN_IPS", "").split(",") if ip.strip()}
 COLUMN_ID = os.environ.get("COLUMN_ID", "LP00000000000001982300007d20fe15")
 
@@ -1060,7 +1065,7 @@ def run_dns(port=53):
     try:
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        udp.bind(("0.0.0.0", port))
+        udp.bind((BIND_IP, port))
         _ips = ", ".join(local_ips())
         print(f"[*] DNS сервер слушает UDP {port} (quasar.* -> {_ips})")
         sys.stdout.flush()
@@ -1078,7 +1083,7 @@ def run_dns(port=53):
 
         tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        tcp.bind(("0.0.0.0", port))
+        tcp.bind((BIND_IP, port))
         tcp.listen(16)
 
         while True:
@@ -1121,7 +1126,7 @@ class ReusableServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def run_http(port=80):
     try:
-        httpd = ReusableServer(("0.0.0.0", port), EquasarHandler)
+        httpd = ReusableServer((BIND_IP, port), EquasarHandler)
         print(f"[*] HTTP сервер слушает порт {port}...")
         httpd.serve_forever()
     except Exception as e:
@@ -1129,7 +1134,7 @@ def run_http(port=80):
 
 def run_https(cert_file, key_file, port=443):
     try:
-        httpd = ReusableServer(("0.0.0.0", port), EquasarHandler)
+        httpd = ReusableServer((BIND_IP, port), EquasarHandler)
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         # старые прошивки (Mini 2019) умеют только TLS 1.2 и ниже — не отсекаем их
         try:
