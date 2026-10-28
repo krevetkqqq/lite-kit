@@ -672,7 +672,7 @@ class EquasarHandler(http.server.BaseHTTPRequestHandler):
                 import urllib.parse as _u
                 q = _u.parse_qs(_u.urlparse(self.path).query)
                 cur = (q.get("version") or [""])[0]
-                plat = (q.get("platform") or [""])[0]
+                plat = (q.get("platform") or q.get("device_type") or [""])[0]
             except Exception:
                 pass
             fw = fw_manifest(plat) if plat else None
