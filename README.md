@@ -27,10 +27,16 @@
 | Yandex Mini (`yandexmini`, `1.305.4.16.3237824040.20250721`) | ✅ работает |
 | Yandex Station Midi (`cucumber`, с часами) | ✅ работает |
 | Yandex Mini 2 | ✅ рутована (версия прошивки не зафиксирована) |
+| Yandex Station Max (`yandexstation_2`, YNDX-0008) | ✅ ADB на `5000000921`; root/ Permissive — отдельным эксплойтом |
 
 - **Мини**: даунгрейд проверен до `1.305.4.16.3237824040.20250721` (ставили с `1.3.4.12…`),
   и уже с этой прошивки включается ADB через `/get_sync_info` → `:5555`.
 - На живой колонке: `adb connect <IP>:5555` → `adb shell id` → `uid=0(root)`.
+- **Макс (YNDX-0008)**: это Android TV, а не Buildroot. На старых сборках
+  quasar-сервис `adbd` не имеет `quasmodromNetworkActivateCmd`, поэтому ему
+  нужен `network:false`; на `0921`/3.x ADB включает
+  `com.yandex.tv.services.platform.adbEnabled` (см. [docs/sync-adb.md](docs/sync-adb.md)).
+  Проверено: `adb connect` работает, `settings get global adb_enabled` = `1`.
 
 ---
 
