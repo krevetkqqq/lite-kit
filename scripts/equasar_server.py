@@ -372,6 +372,37 @@ def _inject_adbd(d, platform=None):
     return d
 
 
+UNBOUND_REFUSE = (
+    'local-zone: "clck.yandex.net." refuse',
+    'local-zone: "clck.yasmina.yango.com." refuse',
+)
+
+
+def unbound_privacy():
+    """По желанию: UNBOUND_PRIVACY=1 или touch run/unbound_privacy."""
+    return (os.environ.get("UNBOUND_PRIVACY") == "1"
+            or os.path.exists(os.path.join(BASE_DIR, "run", "unbound_privacy")))
+
+
+def _inject_unbound(d):
+    """unbound колонки без DNS Яндекса (77.88.8.x) и без телеметрии clck.
+
+    Пустые forwarders: хук dhcpcd сам допишет DNS из DHCP, и quasar.* дальше
+    разрешаются через DNS стенда. Колонка хранит этот блок в user_config.dat и
+    при каждой синхронизации перезаписывает его тем, что пришло, поэтому
+    править его на колонке бесполезно — только здесь.
+    """
+    if not unbound_privacy():
+        return d
+    ub = d.setdefault("config", {}).setdefault("system_config", {}).setdefault("unbound", {})
+    ub["forwarders"] = []
+    params = ub.setdefault("serverParams", [])
+    for line in UNBOUND_REFUSE:
+        if line not in params:
+            params.append(line)
+    return d
+
+
 def sync_payload(source=None, platform=None):
     """Ответ /get_sync_info со включённым ADB.
 
