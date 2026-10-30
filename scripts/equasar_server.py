@@ -488,10 +488,26 @@ def _cache_file(path_qs):
 class EquasarHandler(http.server.BaseHTTPRequestHandler):
     # старые прошивки (Mini 2019) ждут HTTP/1.1, на HTTP/1.0 считают проверку связи неудачной
     protocol_version = "HTTP/1.1"
+
+    def handle_one_request(self):
+        # Один handler обслуживает несколько запросов keep-alive соединения.
+        # Кэш тела относится только к текущему запросу.
+        self._body = None
+        return super().handle_one_request()
+
     def log_message(self, format, *args):
         client = self.client_address[0]
         ua = self.headers.get("User-Agent", "-")
-        print(f"[{client}] {self.command} {self.path} UA={ua} -> {args[1] if len(args) > 1 else 'OK'}")
+        # При ошибке разбора метод может содержать непрочитанное тело с токеном.
+        method = self.command if self.command in {
+            "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"
+        } else "<invalid-method>"
+        status = "OK"
+        if len(args) > 1 and str(args[1]).isdigit():
+            status = str(args[1])
+        elif args and isinstance(args[0], int):
+            status = str(args[0])
+        print(f"[{client}] {method} {self.path} UA={ua} -> {status}")
         sys.stdout.flush()
 
     def do_GET(self):
