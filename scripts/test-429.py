@@ -61,6 +61,9 @@ class FakeConn:
 
 es.PinnedHTTPS = FakeConn
 es.real_ip = lambda host="quasar.yandex.net": "127.0.0.1"
+# Тесты OTA не должны зависеть от наличия run/no_downgrade у пользователя.
+# Отдельные тесты самостоятельно включают запрет OTA для проверки.
+es.no_downgrade = lambda: False
 # в тестах не ждём паузы между повторами
 es.RETRY_ATTEMPTS = 1
 es.RETRY_DELAY = 0
