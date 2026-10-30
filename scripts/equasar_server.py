@@ -18,6 +18,7 @@ import http.client
 import json
 import time
 import urllib.request
+import urllib.parse
 
 # Windows-консоль по умолчанию cp1251 — принудительно UTF-8, иначе падаем на «←»/«→»
 try:
@@ -31,7 +32,10 @@ UPSTREAM_HOST = "quasar.yandex.net"
 
 def real_ip(host=UPSTREAM_HOST):
     """Настоящий IP: DoH -> системный DNS -> известный адрес (свой IP не отдаём)."""
+    # LOCAL_IP может быть дополнительным адресом интерфейса: gethostbyname_ex его не видит
     mine = set(local_ips()) if "local_ips" in globals() else set()
+    if "LOCAL_IP" in globals():
+        mine.add(LOCAL_IP)
     try:
         u = "https://dns.google/resolve?name=%s&type=A" % host
         d = json.loads(urllib.request.urlopen(u, timeout=5).read())
@@ -249,6 +253,8 @@ def _downgrade_payload(fw=None):
 
 # --- опциональные настройки через окружение (все необязательные) ---
 LOCAL_IP = os.environ.get("LOCAL_IP") or _local_ip()
+# адрес, на котором слушают DNS/HTTP/HTTPS; 0.0.0.0 — все интерфейсы
+BIND_IP = os.environ.get("BIND_IP") or "0.0.0.0"
 COLUMN_IPS = {ip.strip() for ip in os.environ.get("COLUMN_IPS", "").split(",") if ip.strip()}
 COLUMN_ID = os.environ.get("COLUMN_ID", "LP00000000000001982300007d20fe15")
 
@@ -268,6 +274,15 @@ SYNC_TEMPLATE = os.path.join(BASE_DIR, "log", "sync_template.json")
 # базовый шаблон — «обычные» станции, он лежит в репозитории и не зависит от Mini
 SYNC_BASE = os.path.join(BASE_DIR, "scripts", "sync_template.json")
 ADBD = {"remoteActivation": True, "network": True, "fullDurationMs": 31536000000}
+# Android TV / YaOS (Станция Макс, Дуо Макс): ADB включается не через quasar-ключ
+# system_config.adbd, а через настройки приложения com.yandex.tv.services.platform.
+# Оно пишет Settings.Global.ADB_ENABLED / DEVELOPMENT_SETTINGS_ENABLED.
+TV_PLATFORM = {"adbEnabled": True, "developmentSettingsEnabled": True}
+# У yandexstation_2 (Макс) и yandexstation (Станция 1, Android) в quasar.cfg НЕТ
+# quasmodromNetworkActivateCmd. Если отдать network=true, AdbService выберет пустую
+# команду и ничего не запустит. У этих платформ activate_adb.sh и без --network
+# прописывает service.adb.tcp.port=5555, поэтому network нужно выключать.
+ADB_NO_NETWORK_PLATFORMS = {"yandexstation_2", "yandexstation"}
 
 _TEMPLATE = {"loaded": False, "data": None}
 
@@ -304,56 +319,68 @@ def _load_template():
     return None
 
 
-def _inject_adbd(d):
+def _native_adb_state(d):
+    """ADB-поля в ответе Яндекса ДО нашей инъекции — для сравнения моделей."""
+    cfg = d.get("config") or {}
+    syscfg = cfg.get("system_config") or {}
+    dev = cfg.get("device_config") or {}
+    return {
+        "system.adbd": syscfg.get("adbd"),
+        "device.adbd": dev.get("adbd"),
+        "top.adbd": d.get("adbd"),
+        "tv.platform": syscfg.get("com.yandex.tv.services.platform"),
+    }
+
+
+def _inject_tv_platform(section):
+    """Android TV / YaOS: com.yandex.tv.services.platform.adbEnabled.
+
+    На Максе (yandexstation_2) нет quasar-демона, который читает
+    system_config.adbd. Настройку ADB обрабатывает системное приложение
+    YandexTvPlatformServices: оно ставит Settings.Global.ADB_ENABLED=1.
+    В /vendor/build.prop у Макса уже прописан service.adb.tcp.port=5555,
+    поэтому после этого adbd начинает слушать сетевой порт.
+    """
+    if not isinstance(section, dict):
+        return
+    current = section.get("com.yandex.tv.services.platform")
+    tv = dict(current) if isinstance(current, dict) else {}
+    tv.update(TV_PLATFORM)          # не затираем другие флаги платформы
+    section["com.yandex.tv.services.platform"] = tv
+
+
+def _adbd_config(platform=None):
+    """ADB-флаги с учётом платформы (у Макса нет network-команды в quasar.cfg)."""
+    d = dict(ADBD)
+    if (platform or "").lower() in ADB_NO_NETWORK_PLATFORMS:
+        d["network"] = False
+    return d
+
+
+def _inject_adbd(d, platform=None):
     """Вписывает ADB во все ветки, которые читают разные прошивки."""
+    adbd = _adbd_config(platform)
     cfg = d.setdefault("config", {})
     for section in ("system_config", "device_config"):
-        cfg.setdefault(section, {})["adbd"] = dict(ADBD)
-    cfg["adbd"] = dict(ADBD)
-    d["adbd"] = dict(ADBD)
+        cfg.setdefault(section, {})["adbd"] = dict(adbd)
+    cfg["adbd"] = dict(adbd)
+    d["adbd"] = dict(adbd)
+    # Android TV (Макс/Дуо Макс): отдельный ключ, Buildroot-моделям он не мешает.
+    _inject_tv_platform(cfg.setdefault("system_config", {}))
+    _inject_tv_platform(cfg)
     d.setdefault("status", "ok")
     return d
 
 
-UNBOUND_REFUSE = (
-    'local-zone: "clck.yandex.net." refuse',
-    'local-zone: "clck.yasmina.yango.com." refuse',
-)
+def sync_payload(source=None, platform=None):
+    """Ответ /get_sync_info со включённым ADB.
 
-
-def unbound_privacy():
-    """По желанию: UNBOUND_PRIVACY=1 или touch run/unbound_privacy."""
-    return (os.environ.get("UNBOUND_PRIVACY") == "1"
-            or os.path.exists(os.path.join(BASE_DIR, "run", "unbound_privacy")))
-
-
-def _inject_unbound(d):
-    """unbound колонки без DNS Яндекса (77.88.8.x) и без телеметрии clck.
-
-    Пустые forwarders: хук dhcpcd сам допишет DNS из DHCP, и quasar.* дальше
-    разрешаются через DNS стенда. Колонка хранит этот блок в user_config.dat и
-    при каждой синхронизации перезаписывает его тем, что пришло, поэтому
-    править его на колонке бесполезно — только здесь.
-    """
-    if not unbound_privacy():
-        return d
-    ub = d.setdefault("config", {}).setdefault("system_config", {}).setdefault("unbound", {})
-    ub["forwarders"] = []
-    params = ub.setdefault("serverParams", [])
-    for line in UNBOUND_REFUSE:
-        if line not in params:
-            params.append(line)
-    return d
-
-
-def sync_payload(source=None):
-    """Ответ /get_sync_info со включённым ADB — одинаково для всех моделей.
-
+    platform — платформа колонки из query (`yandexstation_2`, `yandexmini`, …).
     source — готовый dict (например, настоящий ответ Яндекса); иначе шаблон.
     """
     if source is not None:
         d = json.loads(json.dumps(source))       # копия, оригинал не портим
-        return json.dumps(_inject_unbound(_inject_adbd(d)), ensure_ascii=False).encode()
+        return json.dumps(_inject_unbound(_inject_adbd(d, platform)), ensure_ascii=False).encode()
     if not _TEMPLATE["loaded"]:
         _TEMPLATE["data"] = _load_template()
         _TEMPLATE["loaded"] = True
@@ -362,7 +389,7 @@ def sync_payload(source=None):
         d = json.loads(SYNC_INFO_PAYLOAD.decode())
     else:
         d = json.loads(json.dumps(base))        # копия
-    return json.dumps(_inject_unbound(_inject_adbd(d)), ensure_ascii=False).encode()
+    return json.dumps(_inject_unbound(_inject_adbd(d, platform)), ensure_ascii=False).encode()
 
 
 OK_PAYLOAD = b'{"status":"ok"}'
@@ -461,10 +488,26 @@ def _cache_file(path_qs):
 class EquasarHandler(http.server.BaseHTTPRequestHandler):
     # старые прошивки (Mini 2019) ждут HTTP/1.1, на HTTP/1.0 считают проверку связи неудачной
     protocol_version = "HTTP/1.1"
+
+    def handle_one_request(self):
+        # Один handler обслуживает несколько запросов keep-alive соединения.
+        # Кэш тела относится только к текущему запросу.
+        self._body = None
+        return super().handle_one_request()
+
     def log_message(self, format, *args):
         client = self.client_address[0]
         ua = self.headers.get("User-Agent", "-")
-        print(f"[{client}] {self.command} {self.path} UA={ua} -> {args[1] if len(args) > 1 else 'OK'}")
+        # При ошибке разбора метод может содержать непрочитанное тело с токеном.
+        method = self.command if self.command in {
+            "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"
+        } else "<invalid-method>"
+        status = "OK"
+        if len(args) > 1 and str(args[1]).isdigit():
+            status = str(args[1])
+        elif args and isinstance(args[0], int):
+            status = str(args[0])
+        print(f"[{client}] {method} {self.path} UA={ua} -> {status}")
         sys.stdout.flush()
 
     def do_GET(self):
@@ -522,6 +565,14 @@ class EquasarHandler(http.server.BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(payload)
 
+    def _request_platform(self):
+        """platform= из query (yandexstation_2, yandexmini, …) или пусто."""
+        try:
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            return (q.get("platform") or [""])[0]
+        except Exception:
+            return ""
+
     def _log_sync_request(self):
         """Что именно спросила колонка: путь, заголовки, тело (секреты маскируются)."""
         body = self._read_body() if self.command in ("POST", "PUT") else b""
@@ -541,11 +592,17 @@ class EquasarHandler(http.server.BaseHTTPRequestHandler):
         try:
             d = json.loads(payload)
             cfg = d.get("config") or {}
+            syscfg = cfg.get("system_config") or {}
+            tv = syscfg.get("com.yandex.tv.services.platform") or {}
+            adb = syscfg.get("adbd") if isinstance(syscfg.get("adbd"), dict) else {}
             marks = {
-                "config.system_config.adbd": (cfg.get("system_config") or {}).get("adbd"),
+                "config.system_config.adbd": syscfg.get("adbd"),
+                "config.system_config.adbd.network": adb.get("network"),
                 "config.device_config.adbd": (cfg.get("device_config") or {}).get("adbd"),
                 "config.adbd": cfg.get("adbd"),
                 "top.adbd": d.get("adbd"),
+                "tv.adbEnabled": tv.get("adbEnabled"),
+                "tv.developmentSettingsEnabled": tv.get("developmentSettingsEnabled"),
             }
             status = ", ".join(f"{k}={'on' if v else 'НЕТ'}" for k, v in marks.items())
             text = _masked_json(payload)
@@ -564,7 +621,7 @@ class EquasarHandler(http.server.BaseHTTPRequestHandler):
         if kind == "register":
             payload = b'{"message":"allvalid","status":"ok"}'   # чтобы колонка не долбила /register
         elif kind == "sync":
-            payload = sync_payload()
+            payload = sync_payload(platform=self._request_platform())
         else:
             payload = OK_PAYLOAD
         self._send_json(payload)
@@ -683,7 +740,7 @@ class EquasarHandler(http.server.BaseHTTPRequestHandler):
         if "get_sync_info" in clean_path.lower():
             self._log_sync_request()
             try:
-                _p = sync_payload()
+                _p = sync_payload(platform=self._request_platform())
             except Exception as e:
                 print(f"  !!! [SYNC] шаблон сломан ({e!r}), отдаю встроенный")
                 _p = SYNC_INFO_PAYLOAD
@@ -703,7 +760,7 @@ class EquasarHandler(http.server.BaseHTTPRequestHandler):
                 import urllib.parse as _u
                 q = _u.parse_qs(_u.urlparse(self.path).query)
                 cur = (q.get("version") or [""])[0]
-                plat = (q.get("platform") or [""])[0]
+                plat = (q.get("platform") or q.get("device_type") or [""])[0]
             except Exception:
                 pass
             fw = fw_manifest(plat) if plat else None
@@ -862,6 +919,12 @@ class EquasarHandler(http.server.BaseHTTPRequestHandler):
                 except (ValueError, UnicodeDecodeError):
                     d = None
                 if isinstance(d, dict) and d:
+                    native = _native_adb_state(d)
+                    print(f"  >>> [SYNC-NATIVE] platform={self._request_platform() or '?'} "
+                          f"system.adbd={native['system.adbd']} "
+                          f"device.adbd={native['device.adbd']} "
+                          f"top.adbd={native['top.adbd']} "
+                          f"tv.platform={native['tv.platform']}")
                     if dump_path and os.environ.get("DUMP_SYNC") == "1":
                         try:
                             with open(dump_path, "wb") as f:
@@ -869,7 +932,7 @@ class EquasarHandler(http.server.BaseHTTPRequestHandler):
                             print(f"  >>> [DUMP] сырой ответ сохранён: {dump_path} ({len(data)}b)")
                         except OSError as e:
                             print(f"  >>> [DUMP] не смог сохранить: {e}")
-                    payload = sync_payload(source=d)
+                    payload = sync_payload(source=d, platform=self._request_platform())
                     self._send_json(payload)
                     print(f"  >>> [SYNC-REAL] ответ Яндекса + adbd ({len(data)}b) <<<")
                     log_local(f"SYNC adbd-инъекция {self.path} ({len(payload)}b)")
@@ -1091,7 +1154,7 @@ def run_dns(port=53):
     try:
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        udp.bind(("0.0.0.0", port))
+        udp.bind((BIND_IP, port))
         _ips = ", ".join(local_ips())
         print(f"[*] DNS сервер слушает UDP {port} (quasar.* -> {_ips})")
         sys.stdout.flush()
@@ -1109,7 +1172,7 @@ def run_dns(port=53):
 
         tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        tcp.bind(("0.0.0.0", port))
+        tcp.bind((BIND_IP, port))
         tcp.listen(16)
 
         while True:
@@ -1152,7 +1215,7 @@ class ReusableServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def run_http(port=80):
     try:
-        httpd = ReusableServer(("0.0.0.0", port), EquasarHandler)
+        httpd = ReusableServer((BIND_IP, port), EquasarHandler)
         print(f"[*] HTTP сервер слушает порт {port}...")
         httpd.serve_forever()
     except Exception as e:
@@ -1160,7 +1223,7 @@ def run_http(port=80):
 
 def run_https(cert_file, key_file, port=443):
     try:
-        httpd = ReusableServer(("0.0.0.0", port), EquasarHandler)
+        httpd = ReusableServer((BIND_IP, port), EquasarHandler)
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         # старые прошивки (Mini 2019) умеют только TLS 1.2 и ниже — не отсекаем их
         try:

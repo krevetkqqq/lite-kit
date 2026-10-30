@@ -81,6 +81,7 @@ $versions = @($versions | Sort-Object -Property @{Expression={ (Get-VersionKey $
 $known = @{
     "yandexmicro" = "0.369.1.46.4778262442.20261013.297"
     "yandexmini"  = "1.305.4.16.3237824040.20250721"
+    "yandexmini_2" = "0.369.1.46.4778262943.20261013.299"
 }
 $knownVersion = $known[$Platform]
 

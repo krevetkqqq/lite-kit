@@ -27,10 +27,16 @@
 | Yandex Mini (`yandexmini`, `1.305.4.16.3237824040.20250721`) | ✅ работает |
 | Yandex Station Midi (`cucumber`, с часами) | ✅ работает |
 | Yandex Mini 2 | ✅ рутована (версия прошивки не зафиксирована) |
+| Yandex Station Max (`yandexstation_2`, YNDX-0008) | ✅ ADB на `5000000921`; root/ Permissive — отдельным эксплойтом |
 
 - **Мини**: даунгрейд проверен до `1.305.4.16.3237824040.20250721` (ставили с `1.3.4.12…`),
   и уже с этой прошивки включается ADB через `/get_sync_info` → `:5555`.
 - На живой колонке: `adb connect <IP>:5555` → `adb shell id` → `uid=0(root)`.
+- **Макс (YNDX-0008)**: это Android TV, а не Buildroot. На старых сборках
+  quasar-сервис `adbd` не имеет `quasmodromNetworkActivateCmd`, поэтому ему
+  нужен `network:false`; на `0921`/3.x ADB включает
+  `com.yandex.tv.services.platform.adbEnabled` (см. [docs/sync-adb.md](docs/sync-adb.md)).
+  Проверено: `adb connect` работает, `settings get global adb_enabled` = `1`.
 
 ---
 
@@ -174,7 +180,9 @@ Enter = значение по умолчанию.
 | `.\install-firmware.ps1 -Mirror http://…:62891` | `./install-firmware.sh -p … -v …` с `MIRROR_URL=…` |
 
 Проверенные версии: `yandexmicro` → `0.369.1.46.4778262442.20261013.297`,
-`yandexmini` → `1.305.4.16.3237824040.20250721`. Старые `.zip` удаляются **внутри
+`yandexmini` → `1.305.4.16.3237824040.20250721`,
+`yandexmini_2` → `0.369.1.46.4778262943.20261013.299` (откат с `0.372.1.13…` через factory-образ).
+Старые `.zip` удаляются **внутри
 папки этой платформы** (`firmware/<platform>/`), другие модели не затрагиваются.
 
 Если зеркало отдаёт обрезанный файл (типичный симптом — ~33 КБ вместо 60 МБ),
@@ -245,6 +253,7 @@ opkg() { PATH="$OPT/bin:$OPT/sbin:$PATH" env -u LD_LIBRARY_PATH -u LD_PRELOAD "$
 | Переменная | По умолчанию | Зачем |
 |---|---|---|
 | `LOCAL_IP` | определяется сам | основной IP (в манифесте `fallbackIp`); DNS отвечает IP из подсети клиента, если их несколько (LAN + хот-спот) |
+| `BIND_IP` | `0.0.0.0` | слушать DNS, HTTP и HTTPS только на этом адресе, если порты `53`/`80`/`443` на других адресах ПК заняты (Pi-hole, Tailscale и т. п.); обычно тот же, что `LOCAL_IP` |
 | `COLUMN_IPS` | пусто | IP колонок через запятую, если автоопределение не сработало |
 | `SYNC_RETRIES` / `SYNC_RETRY_DELAY` | `3` / `2.5` | повторы при 429/5xx |
 | `MIRROR_URL` | `http://144.76.194.29:62891` | зеркало прошивок |
