@@ -4,7 +4,7 @@
 set -uo pipefail
 
 BASE="$(cd "$(dirname "$0")" && pwd)"
-[ "$(id -u)" = 0 ] || exec sudo --preserve-env=SYNC_PROXY,COLUMN_IPS,LOCAL_IP,BIND_IP,EQUASAR_MODE,SYNC_RETRIES,SYNC_RETRY_DELAY bash "$0" "$@"
+[ "$(id -u)" = 0 ] || exec sudo --preserve-env=SYNC_PROXY,COLUMN_IPS,LOCAL_IP,BIND_IP,UNBOUND_PRIVACY,EQUASAR_MODE,SYNC_RETRIES,SYNC_RETRY_DELAY bash "$0" "$@"
 
 OS="$(uname -s)"
 
