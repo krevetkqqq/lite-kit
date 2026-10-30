@@ -87,6 +87,7 @@ if [ -z "$VERSION" ]; then
     case "$PLATFORM" in
         yandexmicro) KNOWN="0.369.1.46.4778262442.20261013.297" ;;
         yandexmini)  KNOWN="1.305.4.16.3237824040.20250721" ;;
+        yandexmini_2) KNOWN="0.369.1.46.4778262943.20261013.299" ;;
         *)           KNOWN="" ;;
     esac
     i=0
