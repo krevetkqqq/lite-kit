@@ -9,13 +9,16 @@ BASE="$(cd "$(dirname "$0")" && pwd)"
 OS="$(uname -s)"
 
 # --- IP этой машины в локальной сети (не VPN, не docker) ---
-if [ "$OS" = "Darwin" ]; then
-    IP="$(ipconfig getifaddr en0 2>/dev/null || true)"
-    [ -z "$IP" ] && IP="$(ipconfig getifaddr en1 2>/dev/null || true)"
-else
-    IFACE="$(ip route 2>/dev/null | awk '/^default/{print $5; exit}')"
-    [ -n "$IFACE" ] && IP="$(ip -4 addr show dev "$IFACE" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1)"
-    [ -z "${IP:-}" ] && IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+IP="${LOCAL_IP:-}"
+if [ -z "$IP" ]; then
+    if [ "$OS" = "Darwin" ]; then
+        IP="$(ipconfig getifaddr en0 2>/dev/null || true)"
+        [ -z "$IP" ] && IP="$(ipconfig getifaddr en1 2>/dev/null || true)"
+    else
+        IFACE="$(ip route 2>/dev/null | awk '/^default/{print $5; exit}')"
+        [ -n "$IFACE" ] && IP="$(ip -4 addr show dev "$IFACE" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1)"
+        [ -z "${IP:-}" ] && IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
 fi
 if [ -z "${IP:-}" ]; then echo "[!] не смог определить IP этой машины в локальной сети"; exit 1; fi
 
